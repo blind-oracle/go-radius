@@ -6,7 +6,6 @@ Significant changes:
 * Common
   * Encoding/Decoding of attribute 26 (Vendor-Specific)
   * RFC2866 & RFC2869 (Accounting)
-  * RFC5176
 
 * Server
   * Request throttling (maximum requests per second) support
@@ -17,3 +16,5 @@ Significant changes:
 
 * Client
   * Vendor-specific (Cisco, Juniper, Mikrotik) functions and constants
+  * Support for generating CoA/Disconnect-Message packets
+  
