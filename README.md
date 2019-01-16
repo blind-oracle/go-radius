@@ -32,7 +32,7 @@ import (
 
 func main() {
     handler := func (w radius.ResponseWriter, p *radius.Packet) {
-        w.Write(r.Response(radius.CodeAccessAccept))
+        w.AccessAccept()
     }
 
     server := radius.Server{
