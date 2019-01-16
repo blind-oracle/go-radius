@@ -8,31 +8,30 @@ import (
 	"time"
 )
 
+// Some commonly used attribute IDs
 const (
-	RAD_ATTR_FRAMED_IP_ADDRESS  = 8
-	RAD_ATTR_VENDOR_SPECIFIC    = 26
-	RAD_ATTR_CALLING_STATION_ID = 31
-	RAD_ATTR_ACCT_SESSION_ID    = 44
-
-	COA_PORT_CISCO    = 1700
-	COA_PORT_MIKROTIK = 3799
-	COA_PORT_JUNIPER  = 3799
-	COA_PORT_IPOE     = 3799
-
-	CISCO_REAUTHENTICATE_COMMAND = "subscriber:command=account-reauthenticate"
-	JUNIPER_SERVICE_ACTIVE       = "104 Service active"
-
-	REQ_TYPE_DISCONNECT = 1
-	REQ_TYPE_AUTHORIZE  = 2
+	AttrFramedIPAddress  = 8
+	AttrVendorSpecific   = 26
+	AttrCallingStationID = 31
+	AttrAcctSessionID    = 44
 )
 
+// Default CoA ports
+const (
+	coaPortCisco    = 1700
+	coaPortMikrotik = 3799
+	coaPortJuniper  = 3799
+)
+
+// Some service stuff
 var (
-	ciscoReauthenticateAVPair []byte
-	juniperServiceActive      []byte
+	ciscoReauthenticateCommand = "subscriber:command=account-reauthenticate"
+	ciscoReauthenticateAVPair  []byte
+	juniperServiceActive       = []byte("104 Service active")
 )
 
-// Parameters specific to an outgoing RADIUS request
-type RADIUSParams struct {
+// RequestParams are parameters specific to an outgoing RADIUS request
+type RequestParams struct {
 	Secret         []byte
 	SrcAddress     *net.UDPAddr
 	DstAddressPort *net.UDPAddr
@@ -48,6 +47,7 @@ type Client struct {
 	Retries int
 }
 
+// RequestResult is a RADIUS request result
 type RequestResult struct {
 	Success      bool
 	Duration     time.Duration
@@ -61,12 +61,12 @@ type RequestResult struct {
 
 func init() {
 	// Encode the request here for later use
-	ciscoReauthenticateAVPair = EncodeAVPairCisco(CISCO_REAUTHENTICATE_COMMAND)
-	juniperServiceActive = []byte(JUNIPER_SERVICE_ACTIVE)
+	ciscoReauthenticateAVPair = EncodeAVPairCisco(ciscoReauthenticateCommand)
+	juniperServiceActive = []byte(juniperServiceActive)
 }
 
 // Exchange sends the packet to the given server address and waits for a
-// response. nil and an error is returned upon failure.
+// response.
 func (c *Client) Exchange(packet *Packet, dst *net.UDPAddr, src *net.UDPAddr) (reply *Packet, err error) {
 	var (
 		wire []byte
@@ -110,221 +110,201 @@ func (c *Client) Exchange(packet *Packet, dst *net.UDPAddr, src *net.UDPAddr) (r
 	return
 }
 
-func (c *Client) Request(Params *RADIUSParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
+// Request send a RADIUS request
+func (c *Client) Request(params *RequestParams, requestType Code, attrs ...*Attribute) (result *RequestResult) {
 	var (
 		reply *Packet
 	)
 
-	Result = &RequestResult{Timestamp: time.Now()}
-	p := New(RequestType, Params.Secret)
-	p.AddAttrs(Attrs)
+	result = &RequestResult{Timestamp: time.Now()}
+	p := New(requestType, params.Secret)
+	p.AddAttrs(attrs)
 
-	if reply, Result.Error = c.Exchange(p, Params.DstAddressPort, Params.SrcAddress); Result.Error == nil {
+	if reply, result.Error = c.Exchange(p, params.DstAddressPort, params.SrcAddress); result.Error == nil {
 		switch reply.Code {
 		case CodeDisconnectACK, CodeCoAACK:
-			Result.Success = true
+			result.Success = true
 
 		case CodeDisconnectNAK, CodeCoANAK:
 			if reply.Value("Error-Cause") != nil {
-				Result.ErrorCause = ErrorCause(reply.Value("Error-Cause").(uint32))
+				result.ErrorCause = ErrorCause(reply.Value("Error-Cause").(uint32))
 			}
 
-			if Result.AVPairs, Result.Error = DecodeAVPairs(reply); Result.Error != nil {
-				Result.Error = fmt.Errorf("Got NAK, but unable to parse reply AVPairs: %s", Result.Error.Error())
+			if result.AVPairs, result.Error = DecodeAVPairs(reply); result.Error != nil {
+				result.Error = fmt.Errorf("Got NAK, but unable to parse reply AVPairs: %s", result.Error.Error())
 			}
 
 		default:
-			Result.Error = fmt.Errorf("Unknown reply code: %d", int(reply.Code))
+			result.Error = fmt.Errorf("Unknown reply code: %d", int(reply.Code))
 		}
 	}
 
-	if Result.Success {
-		Result.ResultString = "ACK"
-	} else {
-		if Result.Error == nil {
-			Result.ResultString = "NAK"
+	if result.Success {
+		result.ResultString = "ACK"
+		return
+	}
 
-			if Result.ErrorCause > 0 {
-				Result.ResultString += " (ErrorCause " + strconv.Itoa(int(Result.ErrorCause)) + ")"
-			}
+	if result.Error == nil {
+		result.ResultString = "NAK"
+
+		if result.ErrorCause > 0 {
+			result.ResultString += " (ErrorCause " + strconv.Itoa(int(result.ErrorCause)) + ")"
+		}
+	} else {
+		if err, ok := result.Error.(net.Error); ok && err.Timeout() {
+			result.ResultString = "Timeout"
 		} else {
-			if err, ok := Result.Error.(net.Error); ok && err.Timeout() {
-				Result.ResultString = "Timeout"
-			} else {
-				Result.ResultString = "Error"
-				Result.ErrorString = Result.Error.Error()
-			}
+			result.ResultString = "Error"
+			result.ErrorString = result.Error.Error()
 		}
 	}
 
 	return
 }
 
-// IPoE request wrapper
-func (c *Client) IPoERequest(Params *RADIUSParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
+// CiscoRequest is a Cisco request wrapper
+func (c *Client) CiscoRequest(Params *RequestParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
 	if Params.DstAddressPort.Port == 0 {
-		Params.DstAddressPort.Port = COA_PORT_IPOE
+		Params.DstAddressPort.Port = coaPortCisco
 	}
 
 	return c.Request(Params, RequestType, Attrs...)
 }
 
-// IPoE disconnect wrapper
-func (c *Client) IPoEDisconnect(Params *RADIUSParams, CallingStationId string) *RequestResult {
-	return c.IPoERequest(
-		Params,
-		CodeDisconnectRequest,
-
-		&Attribute{
-			Type:  RAD_ATTR_CALLING_STATION_ID,
-			Value: CallingStationId,
-		},
-	)
-}
-
-// Cisco request wrapper
-func (c *Client) CiscoRequest(Params *RADIUSParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
-	if Params.DstAddressPort.Port == 0 {
-		Params.DstAddressPort.Port = COA_PORT_CISCO
-	}
-
-	return c.Request(Params, RequestType, Attrs...)
-}
-
-// Cisco disconnect wrapper
-func (c *Client) CiscoDisconnect(Params *RADIUSParams, CallingStationId string) *RequestResult {
+// CiscoDisconnect is a Cisco disconnect wrapper
+func (c *Client) CiscoDisconnect(Params *RequestParams, CallingStationID string) *RequestResult {
 	return c.CiscoRequest(
 		Params,
 		CodeDisconnectRequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_CALLING_STATION_ID,
-			Value: CallingStationId,
+			Type:  AttrCallingStationID,
+			Value: CallingStationID,
 		},
 	)
 }
 
-// Cisco reauthenticate wrapper
-func (c *Client) CiscoReauthenticate(Params *RADIUSParams, CallingStationId string) *RequestResult {
+// CiscoReauthenticate is a Cisco reauthenticate wrapper
+func (c *Client) CiscoReauthenticate(Params *RequestParams, CallingStationID string) *RequestResult {
 	return c.CiscoRequest(
 		Params,
 		CodeCoARequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_CALLING_STATION_ID,
-			Value: CallingStationId,
+			Type:  AttrCallingStationID,
+			Value: CallingStationID,
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
+			Type:  AttrVendorSpecific,
 			Value: ciscoReauthenticateAVPair,
 		},
 	)
 }
 
-// Juniper request wrapper
-func (c *Client) JuniperRequest(Params *RADIUSParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
+// JuniperRequest is a Juniper request wrapper
+func (c *Client) JuniperRequest(Params *RequestParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
 	if Params.DstAddressPort.Port == 0 {
-		Params.DstAddressPort.Port = COA_PORT_JUNIPER
+		Params.DstAddressPort.Port = coaPortJuniper
 	}
 
 	return c.Request(Params, RequestType, Attrs...)
 }
 
-// Activates a Juniper service
-func (c *Client) JuniperActivateService(Params *RADIUSParams, AcctSessionId, Service string, Timeout uint32) *RequestResult {
+// JuniperActivateService activates a Juniper service
+func (c *Client) JuniperActivateService(Params *RequestParams, AcctSessionID, Service string, Timeout uint32) *RequestResult {
 	return c.JuniperRequest(
 		Params,
 		CodeCoARequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_ACCT_SESSION_ID,
-			Value: AcctSessionId,
+			Type:  AttrAcctSessionID,
+			Value: AcctSessionID,
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
-			Value: EncodeAVPairJuniperByteTag(AVP_JUN_SVC_ACT, 1, []byte(Service)),
+			Type:  AttrVendorSpecific,
+			Value: EncodeAVPairJuniperByteTag(AVPJunSvcAct, 1, []byte(Service)),
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
-			Value: EncodeAVPairJuniperByte(AVP_JUN_SVC_TIMEOUT, EncodeJuniperTimeoutTag(Timeout, 1)),
+			Type:  AttrVendorSpecific,
+			Value: EncodeAVPairJuniperByte(AVPJunSvcTimeout, EncodeJuniperTimeoutTag(Timeout, 1)),
 		},
 	)
 }
 
-// Deactivates a Juniper service
-func (c *Client) JuniperDeactivateService(Params *RADIUSParams, AcctSessionId, Service string) *RequestResult {
+// JuniperDeactivateService deactivates a Juniper service
+func (c *Client) JuniperDeactivateService(Params *RequestParams, AcctSessionID, Service string) *RequestResult {
 	return c.JuniperRequest(
 		Params,
 		CodeCoARequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_ACCT_SESSION_ID,
-			Value: AcctSessionId,
+			Type:  AttrAcctSessionID,
+			Value: AcctSessionID,
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
-			Value: EncodeAVPairJuniperByte(AVP_JUN_SVC_DEACT, []byte(Service)),
+			Type:  AttrVendorSpecific,
+			Value: EncodeAVPairJuniperByte(AVPJunSvcDeact, []byte(Service)),
 		},
 	)
 }
 
-// Update a Juniper service
-func (c *Client) JuniperUpdateService(Params *RADIUSParams, AcctSessionId, Service string, Timeout uint32) *RequestResult {
+// JuniperUpdateService Updates a Juniper service
+func (c *Client) JuniperUpdateService(Params *RequestParams, AcctSessionID, Service string, Timeout uint32) *RequestResult {
 	return c.JuniperRequest(
 		Params,
 		CodeCoARequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_ACCT_SESSION_ID,
-			Value: AcctSessionId,
+			Type:  AttrAcctSessionID,
+			Value: AcctSessionID,
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
-			Value: EncodeAVPairJuniperByteTag(AVP_JUN_SVC_UPDATE, 1, []byte(Service)),
+			Type:  AttrVendorSpecific,
+			Value: EncodeAVPairJuniperByteTag(AVPJunSvcUpdate, 1, []byte(Service)),
 		},
 
 		&Attribute{
-			Type:  RAD_ATTR_VENDOR_SPECIFIC,
-			Value: EncodeAVPairJuniperByte(AVP_JUN_SVC_TIMEOUT, EncodeJuniperTimeoutTag(Timeout, 1)),
+			Type:  AttrVendorSpecific,
+			Value: EncodeAVPairJuniperByte(AVPJunSvcTimeout, EncodeJuniperTimeoutTag(Timeout, 1)),
 		},
 	)
 }
 
-// Disconnect a Juniper session
-func (c *Client) JuniperDisconnect(Params *RADIUSParams, AcctSessionId string) *RequestResult {
+// JuniperDisconnect disconnects a Juniper session
+func (c *Client) JuniperDisconnect(Params *RequestParams, AcctSessionID string) *RequestResult {
 	return c.JuniperRequest(
 		Params,
 		CodeDisconnectRequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_ACCT_SESSION_ID,
-			Value: AcctSessionId,
+			Type:  AttrAcctSessionID,
+			Value: AcctSessionID,
 		},
 	)
 }
 
-// Mikrotik request wrapper
-func (c *Client) MikrotikRequest(Params *RADIUSParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
+// MikrotikRequest is a Mikrotik request wrapper
+func (c *Client) MikrotikRequest(Params *RequestParams, RequestType Code, Attrs ...*Attribute) (Result *RequestResult) {
 	if Params.DstAddressPort.Port == 0 {
-		Params.DstAddressPort.Port = COA_PORT_MIKROTIK
+		Params.DstAddressPort.Port = coaPortMikrotik
 	}
 
 	return c.Request(Params, RequestType, Attrs...)
 }
 
-// Mikrotik disconnect wrapper
-func (c *Client) MikrotikDisconnect(Params *RADIUSParams, ClientIP net.IP) *RequestResult {
+// MikrotikDisconnect is a Mikrotik disconnect wrapper
+func (c *Client) MikrotikDisconnect(Params *RequestParams, ClientIP net.IP) *RequestResult {
 	return c.MikrotikRequest(
 		Params,
 		CodeDisconnectRequest,
 
 		&Attribute{
-			Type:  RAD_ATTR_FRAMED_IP_ADDRESS,
+			Type:  AttrFramedIPAddress,
 			Value: ClientIP,
 		},
 	)

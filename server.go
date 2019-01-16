@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	aux "github.com/blind-oracle/go-aux"
-
 	"golang.org/x/time/rate"
 )
 
@@ -39,7 +37,7 @@ type ResponseWriter interface {
 	Write(packet *Packet) error
 
 	// AccountingACK sends an Accounting-Response packet to the sender that includes
-	// the given attributes. (c) Novgorodov
+	// the given attributes.
 	AccountingACK(attributes ...*Attribute) error
 
 	// AccessAccept sends an Access-Accept packet to the sender that includes
@@ -97,23 +95,23 @@ func (r *responseWriter) accessRespond(code Code, attributes ...*Attribute) erro
 	return r.Write(&packet)
 }
 
-// (c) Novgorodov
+// (c) blind-oracle
 func (r *responseWriter) AccountingACK(attributes ...*Attribute) error {
 	return r.accessRespond(CodeAccountingResponse, attributes...)
 }
 
 func (r *responseWriter) AccessAccept(attributes ...*Attribute) error {
-	// TOOD: do not send if packet was not Access-Request
+	// TODO: do not send if packet was not Access-Request
 	return r.accessRespond(CodeAccessAccept, attributes...)
 }
 
 func (r *responseWriter) AccessReject(attributes ...*Attribute) error {
-	// TOOD: do not send if packet was not Access-Request
+	// TODO: do not send if packet was not Access-Request
 	return r.accessRespond(CodeAccessReject, attributes...)
 }
 
 func (r *responseWriter) AccessChallenge(attributes ...*Attribute) error {
-	// TOOD: do not send if packet was not Access-Request
+	// TODO: do not send if packet was not Access-Request
 	return r.accessRespond(CodeAccessChallenge, attributes...)
 }
 
@@ -154,6 +152,7 @@ func (r *responseWriter) SetReplyReplication(state bool) {
 	r.replicateReplies = state
 }
 
+// RadClient is a RADIUS client
 type RadClient struct {
 	Net    uint32
 	Mask   uint32
@@ -203,40 +202,40 @@ type Server struct {
 	listener *net.UDPConn
 }
 
-// Parse clients map (c) Novgorodov
-func parseClientsMap(ClientsMapIn map[string]string) (ClientsMapOut map[uint32]*RadClient, MasksOut []uint32, err error) {
+// Parse clients map
+func parseClientsMap(clientsIn map[string]string) (clientsOut map[uint32]*RadClient, masks []uint32, err error) {
 	var subnet *net.IPNet
 
-	if ClientsMapIn == nil {
+	if clientsIn == nil {
 		err = errors.New("Clients map is nil")
 		return
 	}
 
-	ClientsMapOut = make(map[uint32]*RadClient)
-	MasksTmp := make(map[uint32]bool)
+	clientsOut = make(map[uint32]*RadClient)
+	masksTmp := make(map[uint32]bool)
 
-	for k, v := range ClientsMapIn {
+	for k, v := range clientsIn {
 		if _, subnet, err = net.ParseCIDR(k); err != nil {
 			return
 		}
 
-		x := aux.IPNetToInt(subnet.IP)
-		ClientsMapOut[x] = &RadClient{
+		x := ipNetToInt(subnet.IP)
+		clientsOut[x] = &RadClient{
 			Net:    x,
-			Mask:   aux.IPByteToInt([]byte(subnet.Mask)),
+			Mask:   ipByteToInt([]byte(subnet.Mask)),
 			Secret: []byte(v),
 		}
 
-		MasksTmp[ClientsMapOut[x].Mask] = true
+		masksTmp[clientsOut[x].Mask] = true
 	}
 
 	// Remember distinct masks and sort them in descending order
 	// Needed to prefer shorter prefixes (/32..) over long (/8...) when iterating array
-	for k, _ := range MasksTmp {
-		MasksOut = append(MasksOut, k)
+	for k := range masksTmp {
+		masks = append(masks, k)
 	}
 
-	MasksOut = aux.ReverseUint32Slice(aux.SortUint32Slice(MasksOut))
+	masks = revUint32Slice(sortUint32Slice(masks))
 	return
 }
 
@@ -287,11 +286,12 @@ func (s *Server) ListenAndServe() (err error) {
 
 	// Parse replication destinations
 	for _, rdest := range s.ReplicateTo {
-		if uaddr, err := net.ResolveUDPAddr("udp4", rdest); err != nil {
+		uaddr, err := net.ResolveUDPAddr("udp4", rdest)
+		if err != nil {
 			return errors.New("Unable to parse UDPAddr: " + rdest)
-		} else {
-			s.replicateToUDPAddr = append(s.replicateToUDPAddr, uaddr)
 		}
+
+		s.replicateToUDPAddr = append(s.replicateToUDPAddr, uaddr)
 	}
 
 	for {
@@ -338,7 +338,7 @@ func (s *Server) ListenAndServe() (err error) {
 
 			// Check if client is defined, use default secret otherwise
 			if s.clientsMap != nil {
-				ip = aux.IPNetToInt(remoteAddr.IP)
+				ip = ipNetToInt(remoteAddr.IP)
 				for _, m := range s.clientsMasks {
 					if client, ok := s.clientsMap[ip&m]; ok {
 						secret = client.Secret

@@ -51,9 +51,9 @@ func init() {
 	Builtin.MustRegister("NAS-Port-Type", 61, AttributeInteger)
 	Builtin.MustRegister("Port-Limit", 62, AttributeInteger)
 	Builtin.MustRegister("Login-LAT-Port", 63, AttributeString)
-	
+
 	Builtin.MustRegister("Message-Authenticator", 80, AttributeString)
-	
+
 	// FreeRADIUS specific
 	Builtin.MustRegister("FreeRADIUS-Statistics-Type", 127, AttributeInteger)
 	Builtin.MustRegister("FreeRADIUS-Total-Access-Requests", 128, AttributeString)
@@ -66,7 +66,7 @@ func init() {
 	Builtin.MustRegister("FreeRADIUS-Total-Auth-Invalid-Requests", 135, AttributeString)
 	Builtin.MustRegister("FreeRADIUS-Total-Auth-Dropped-Requests", 136, AttributeString)
 	Builtin.MustRegister("FreeRADIUS-Total-Auth-Unknown-Types", 137, AttributeString)
-	
+
 	Builtin.MustRegister("L4-Redirect", 242, AttributeInteger)
 }
 
@@ -113,11 +113,11 @@ func (rfc2865UserPassword) Encode(p *Packet, value interface{}) ([]byte, error) 
 	} else {
 		password = bytePassword
 	}
-	
+
 	if len(password) > 16 {
 		return nil, errors.New("radius: invalid User-Password attribute length")
 	}
-	
+
 	var mask [md5.Size]byte
 	hash := md5.New()
 	hash.Write(p.Secret)

@@ -1,11 +1,11 @@
 package radius
 
 import (
-    "bytes"
-    "crypto/md5"
-    "crypto/rand"
-    "encoding/binary"
-    "errors"
+	"bytes"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
 )
 
 // maximum RADIUS packet size
@@ -16,39 +16,39 @@ type Code byte
 
 // Codes which are defined in RFC 2865
 const (
-    CodeAccessRequest		Code = 1
-    CodeAccessAccept		Code = 2
-    CodeAccessReject		Code = 3
-    
-    CodeAccountingRequest	Code = 4
-    CodeAccountingResponse	Code = 5
-    
-    CodeAccessChallenge		Code = 11
-    
-    CodeStatusServer		Code = 12
-    CodeStatusClient		Code = 13
-    
-    CodeDisconnectRequest	Code = 40
-    CodeDisconnectACK		Code = 41
-    CodeDisconnectNAK		Code = 42
-    
-    CodeCoARequest		Code = 43
-    CodeCoAACK			Code = 44
-    CodeCoANAK			Code = 45
-    
-    CodeReserved		Code = 255
+	CodeAccessRequest Code = 1
+	CodeAccessAccept  Code = 2
+	CodeAccessReject  Code = 3
+
+	CodeAccountingRequest  Code = 4
+	CodeAccountingResponse Code = 5
+
+	CodeAccessChallenge Code = 11
+
+	CodeStatusServer Code = 12
+	CodeStatusClient Code = 13
+
+	CodeDisconnectRequest Code = 40
+	CodeDisconnectACK     Code = 41
+	CodeDisconnectNAK     Code = 42
+
+	CodeCoARequest Code = 43
+	CodeCoAACK     Code = 44
+	CodeCoANAK     Code = 45
+
+	CodeReserved Code = 255
 )
 
 // Packet defines a RADIUS packet.
 type Packet struct {
-    Code		Code
-    Identifier		byte
-    Authenticator	[16]byte
-    Secret		[]byte
-    
-    Raw			*[]byte
-    Dictionary		*Dictionary
-    Attributes		[]*Attribute
+	Code          Code
+	Identifier    byte
+	Authenticator [16]byte
+	Secret        []byte
+
+	Raw        *[]byte
+	Dictionary *Dictionary
+	Attributes []*Attribute
 }
 
 // New returns a new packet with the given code and secret. The identifier and
@@ -56,18 +56,18 @@ type Packet struct {
 // Builtin. nil is returned if not enough random data could be generated.
 func New(code Code, secret []byte) *Packet {
 	var buff [17]byte
-	
+
 	if _, err := rand.Read(buff[:]); err != nil {
 		return nil
 	}
-	
+
 	packet := &Packet{
 		Code:       code,
 		Identifier: buff[0],
 		Secret:     secret,
 		Dictionary: Builtin,
 	}
-	
+
 	copy(packet.Authenticator[:], buff[1:])
 	return packet
 }
@@ -83,52 +83,52 @@ func Parse(data, secret []byte, dictionary *Dictionary) (*Packet, error) {
 	if len(data) < 20 {
 		return nil, errors.New("radius: packet must be at least 20 bytes long")
 	}
-	
+
 	packet := &Packet{
-		Code:		Code(data[0]),
-		Raw:		&data,
-		Identifier:	data[1],
-		Secret:		secret,
-		Dictionary:	dictionary,
+		Code:       Code(data[0]),
+		Raw:        &data,
+		Identifier: data[1],
+		Secret:     secret,
+		Dictionary: dictionary,
 	}
-	
+
 	length := binary.BigEndian.Uint16(data[2:4])
 	if length < 20 || length > maxPacketSize {
 		return nil, errors.New("radius: invalid packet length")
 	}
-	
+
 	copy(packet.Authenticator[:], data[4:20])
-	
+
 	// Attributes
 	attributes := data[20:]
 	for len(attributes) > 0 {
 		if len(attributes) < 2 {
 			return nil, errors.New("radius: attribute must be at least 2 bytes long")
 		}
-		
+
 		attrLength := attributes[1]
 		if attrLength < 1 || attrLength > 253 || len(attributes) < int(attrLength) {
 			return nil, errors.New("radius: invalid attribute length")
 		}
-		
+
 		attrType := attributes[0]
 		attrValue := attributes[2:attrLength]
-		
+
 		codec := dictionary.Codec(attrType)
 		decoded, err := codec.Decode(packet, attrValue)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		attr := &Attribute{
 			Type:  attrType,
 			Value: decoded,
 		}
-		
+
 		packet.Attributes = append(packet.Attributes, attr)
 		attributes = attributes[attrLength:]
 	}
-	
+
 	// TODO: validate that the given packet (by code) has all the required attributes, etc.
 	return packet, nil
 }
@@ -142,70 +142,67 @@ func Parse(data, secret []byte, dictionary *Dictionary) (*Packet, error) {
 //      CodeAccountingResponse
 //      CodeAccessChallenge
 //  - p.Authenticator contains the calculated authenticator
-
 func (p *Packet) IsAuthentic(request *Packet) bool {
 	switch p.Code {
-	    case CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccessChallenge, CodeCoAACK, CodeCoANAK, CodeDisconnectACK, CodeDisconnectNAK:
+	case CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccessChallenge, CodeCoAACK, CodeCoANAK, CodeDisconnectACK, CodeDisconnectNAK:
 		wire, err := p.Encode()
 		if err != nil {
-		    return false
+			return false
 		}
-		
+
 		hash := md5.New()
 		hash.Write(wire[0:4])
-		
+
 		switch p.Code {
-		    case CodeAccountingRequest:
+		case CodeAccountingRequest:
 			var nul [16]byte
 			hash.Write(nul[:])
-		    break
-		    
-		    default:
+			break
+
+		default:
 			hash.Write(request.Authenticator[:])
-		    break
+			break
 		}
-		
+
 		hash.Write(wire[20:])
 		hash.Write(request.Secret)
-		
+
 		var sum [md5.Size]byte
 		return bytes.Equal(hash.Sum(sum[0:0]), p.Authenticator[:])
 	}
-	
+
 	return false
 }
 
+// ResponseAuthenticator calculates the response authenticator field
 func (p *Packet) ResponseAuthenticator() (sum []byte, err error) {
-	var (
-	    wire []byte
-	)
-	
+	var wire []byte
+
 	switch p.Code {
-	    case CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccessChallenge:
-	    case CodeCoARequest, CodeCoAACK, CodeCoANAK, CodeDisconnectRequest, CodeDisconnectACK, CodeDisconnectNAK:
+	case CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccessChallenge:
+	case CodeCoARequest, CodeCoAACK, CodeCoANAK, CodeDisconnectRequest, CodeDisconnectACK, CodeDisconnectNAK:
 		if wire, err = p.Encode(); err != nil {
-		    return
+			return
 		}
-		
+
 		hash := md5.New()
 		hash.Write(wire[0:4])
-		
+
 		if p.Code == CodeAccountingRequest {
-		    var nul [16]byte
-		    hash.Write(nul[:])
+			var nul [16]byte
+			hash.Write(nul[:])
 		} else {
-		    hash.Write(p.Authenticator[:])
+			hash.Write(p.Authenticator[:])
 		}
-		
+
 		hash.Write(wire[20:])
 		hash.Write(p.Secret)
 		sum = hash.Sum(sum[0:0])
-		
+
 		return
 	}
-	
+
 	err = errors.New("Unknown packet code")
-	
 	return
 }
 
@@ -234,7 +231,7 @@ func (p *Packet) Attr(name string) *Attribute {
 	return nil
 }
 
-// Returns a slice of all attributes' values with given name (c) Novgorodov
+// Values returns a slice of all attributes' values with given name
 func (p *Packet) Values(name string) (values []interface{}) {
 	for _, attr := range p.Attributes {
 		if attrName, ok := p.Dictionary.Name(attr.Type); ok && attrName == name {
@@ -268,7 +265,7 @@ func (p *Packet) String(name string) string {
 			return stringer.String(value)
 		}
 	}
-	
+
 	if stringer, ok := value.(interface {
 		String() string
 	}); ok {
@@ -278,7 +275,7 @@ func (p *Packet) String(name string) string {
 	if str, ok := value.(string); ok {
 		return str
 	}
-	
+
 	if raw, ok := value.([]byte); ok {
 		return string(raw)
 	}
@@ -300,10 +297,11 @@ func (p *Packet) AddAttr(attribute *Attribute) {
 	p.Attributes = append(p.Attributes, attribute)
 }
 
+// AddAttrs adds several attributes to th epacket.
 func (p *Packet) AddAttrs(attributes []*Attribute) {
-    for _, attr := range attributes {
-	p.Attributes = append(p.Attributes, attr)
-    }
+	for _, attr := range attributes {
+		p.Attributes = append(p.Attributes, attr)
+	}
 }
 
 // Set sets the value of the first attribute whose dictionary name matches the
@@ -363,74 +361,74 @@ func (p *Packet) PAP() (username, password string, ok bool) {
 // packet, nil and an error is returned.
 func (p *Packet) Encode() ([]byte, error) {
 	var bufferAttrs bytes.Buffer
-	
+
 	for _, attr := range p.Attributes {
 		codec := p.Dictionary.Codec(attr.Type)
 		wire, err := codec.Encode(p, attr.Value)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		if len(wire) > 253 {
 			return nil, errors.New("radius: encoded attribute is too long")
 		}
-		
+
 		bufferAttrs.WriteByte(attr.Type)
 		bufferAttrs.WriteByte(byte(len(wire) + 2))
 		bufferAttrs.Write(wire)
 	}
-	
+
 	length := 20 + bufferAttrs.Len()
 	if length > maxPacketSize {
 		return nil, errors.New("radius: encoded packet is too long")
 	}
-	
+
 	var buffer bytes.Buffer
 	buffer.Grow(length)
 	buffer.WriteByte(byte(p.Code))
 	buffer.WriteByte(p.Identifier)
 	binary.Write(&buffer, binary.BigEndian, uint16(length))
-	
+
 	switch p.Code {
-	    case CodeAccessRequest, CodeStatusServer:
+	case CodeAccessRequest, CodeStatusServer:
 		buffer.Write(p.Authenticator[:])
-	    break
-	    
-	    case CodeCoARequest, CodeDisconnectRequest, CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccountingResponse, CodeAccessChallenge, CodeCoAACK, CodeCoANAK, CodeDisconnectACK, CodeDisconnectNAK:
+		break
+
+	case CodeCoARequest, CodeDisconnectRequest, CodeAccessAccept, CodeAccessReject, CodeAccountingRequest, CodeAccountingResponse, CodeAccessChallenge, CodeCoAACK, CodeCoANAK, CodeDisconnectACK, CodeDisconnectNAK:
 		hash := md5.New()
 		hash.Write(buffer.Bytes())
-		
+
 		switch p.Code {
-		    case CodeAccountingRequest, CodeCoARequest, CodeDisconnectRequest:
+		case CodeAccountingRequest, CodeCoARequest, CodeDisconnectRequest:
 			var nul [16]byte
 			hash.Write(nul[:])
-		    break
-		    
-		    default:
+			break
+
+		default:
 			hash.Write(p.Authenticator[:])
-		    break
+			break
 		}
-		
+
 		hash.Write(bufferAttrs.Bytes())
 		hash.Write(p.Secret)
-		
+
 		var sum [16]byte
 		buffer.Write(hash.Sum(sum[0:0]))
-		
-		// We overwrite the original authenticator because it will be used in IsAuthentic() to authenticate a reply (c) Novgorodov
+
+		// We overwrite the original authenticator because it will be used in IsAuthentic() to authenticate a reply
 		switch p.Code {
-		    case CodeCoARequest, CodeDisconnectRequest:
+		case CodeCoARequest, CodeDisconnectRequest:
 			copy(p.Authenticator[:], sum[:])
-		    break
+			break
 		}
-		
+
 		break
-		
-	    default:
+
+	default:
 		return nil, errors.New("radius: unknown Packet code")
 	}
-	
+
 	buffer.ReadFrom(&bufferAttrs)
-	
+
 	return buffer.Bytes(), nil
 }
