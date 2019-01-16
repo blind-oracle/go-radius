@@ -239,6 +239,94 @@ func parseClientsMap(clientsIn map[string]string) (clientsOut map[uint32]*RadCli
 	return
 }
 
+func (s *Server) processPacket(buff []byte, remoteAddr *net.UDPAddr) {
+	var (
+		packet *Packet
+		ip     uint32
+		secret []byte
+		err    error
+	)
+
+	// Set default secret
+	secret = s.Secret
+
+	// Check if client is defined, use default secret otherwise
+	if s.clientsMap != nil {
+		ip = ipNetToInt(remoteAddr.IP)
+		for _, m := range s.clientsMasks {
+			if client, ok := s.clientsMap[ip&m]; ok {
+				secret = client.Secret
+				break
+			}
+		}
+	}
+
+	if packet, err = Parse(buff, secret, s.Dictionary); err != nil {
+		return
+	}
+
+	response := responseWriter{
+		conn:             s.listener,
+		addr:             remoteAddr,
+		packet:           packet,
+		raw:              buff,
+		replicateReplies: s.ReplicateReplies,
+	}
+
+	s.Handler.ServeRadius(&response, packet)
+
+	// Replicate request to globally configured destinations after work is complete
+	if len(s.replicateToUDPAddr) > 0 {
+		for _, rdest := range s.replicateToUDPAddr {
+			// Errors are not checked intentionally
+			s.listener.WriteToUDP(buff, rdest)
+		}
+	}
+
+	// Decrement the counter and broadcast about it
+	if s.MaxPendingRequests > 0 {
+		s.PendingRequestsMtx.Lock()
+		atomic.AddUint32(&s.PendingRequests, ^uint32(0))
+		s.PendingRequestsCond.Broadcast()
+		s.PendingRequestsMtx.Unlock()
+	}
+}
+
+func (s *Server) receivePacket() (err error) {
+	// Ratelimit incoming requests
+	if s.RateLimiter != nil {
+		s.RateLimiter.Wait(s.RateLimiterCtx)
+	}
+
+	// Check if we're over max allowed requests
+	if s.MaxPendingRequests > 0 {
+		s.PendingRequestsMtx.Lock()
+		for atomic.LoadUint32(&s.PendingRequests) >= s.MaxPendingRequests {
+			// If we are then wait until we are not :)
+			s.PendingRequestsCond.Wait()
+		}
+		s.PendingRequestsMtx.Unlock()
+	}
+
+	buff := make([]byte, maxPacketSize)
+	n, remoteAddr, err := s.listener.ReadFromUDP(buff)
+	if err != nil && !err.(*net.OpError).Temporary() {
+		return
+	}
+
+	if n == 0 {
+		return nil
+	}
+
+	if s.MaxPendingRequests > 0 {
+		atomic.AddUint32(&s.PendingRequests, 1)
+	}
+
+	buff = buff[:n]
+	go s.processPacket(buff, remoteAddr)
+	return
+}
+
 // ListenAndServe starts a RADIUS server on the address given in s.
 func (s *Server) ListenAndServe() (err error) {
 	if s.listener != nil {
@@ -295,96 +383,10 @@ func (s *Server) ListenAndServe() (err error) {
 	}
 
 	for {
-		// Ratelimit incoming requests
-		if s.RateLimiter != nil {
-			s.RateLimiter.Wait(s.RateLimiterCtx)
+		if err = s.receivePacket(); err != nil {
+			return
 		}
-
-		// Check if we're over max allowed requests
-		if s.MaxPendingRequests > 0 {
-			s.PendingRequestsMtx.Lock()
-			for atomic.LoadUint32(&s.PendingRequests) >= s.MaxPendingRequests {
-				// If we are then wait until we are not :)
-				s.PendingRequestsCond.Wait()
-			}
-			s.PendingRequestsMtx.Unlock()
-		}
-
-		buff := make([]byte, maxPacketSize)
-		n, remoteAddr, err := s.listener.ReadFromUDP(buff)
-		if err != nil && !err.(*net.OpError).Temporary() {
-			break
-		}
-
-		if n == 0 {
-			continue
-		}
-
-		if s.MaxPendingRequests > 0 {
-			atomic.AddUint32(&s.PendingRequests, 1)
-		}
-
-		buff = buff[:n]
-		go func(conn *net.UDPConn, buff []byte, remoteAddr *net.UDPAddr) {
-			var (
-				packet *Packet
-				ip     uint32
-				secret []byte
-				err    error
-			)
-
-			// Set default secret
-			secret = s.Secret
-
-			// Check if client is defined, use default secret otherwise
-			if s.clientsMap != nil {
-				ip = ipNetToInt(remoteAddr.IP)
-				for _, m := range s.clientsMasks {
-					if client, ok := s.clientsMap[ip&m]; ok {
-						secret = client.Secret
-						break
-					}
-				}
-			}
-
-			if packet, err = Parse(buff, secret, s.Dictionary); err != nil {
-				return
-			}
-
-			response := responseWriter{
-				conn:   conn,
-				addr:   remoteAddr,
-				packet: packet,
-				raw:    buff,
-			}
-
-			if s.ReplicateReplies {
-				response.replicateReplies = true
-			}
-
-			s.Handler.ServeRadius(&response, packet)
-
-			// Replicate request to globally configured destinations after work is complete
-			if len(s.replicateToUDPAddr) > 0 {
-				for _, rdest := range s.replicateToUDPAddr {
-					// Errors are not checked intentionally
-					conn.WriteToUDP(buff, rdest)
-				}
-			}
-
-			// Decrement the counter and broadcast about it
-			if s.MaxPendingRequests > 0 {
-				s.PendingRequestsMtx.Lock()
-				atomic.AddUint32(&s.PendingRequests, ^uint32(0))
-				s.PendingRequestsCond.Broadcast()
-				s.PendingRequestsMtx.Unlock()
-			}
-		}(s.listener, buff, remoteAddr)
 	}
-
-	// TODO: only return nil if s.Close was called
-	s.listener = nil
-	return nil
 }
 
 // Close stops listening for packets. Any packet that is currently being
@@ -393,5 +395,6 @@ func (s *Server) Close() error {
 	if s.listener == nil {
 		return nil
 	}
+
 	return s.listener.Close()
 }
