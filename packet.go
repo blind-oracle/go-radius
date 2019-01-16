@@ -141,6 +141,8 @@ func Parse(data, secret []byte, dictionary *Dictionary) (*Packet, error) {
 //      CodeAccountingRequest
 //      CodeAccountingResponse
 //      CodeAccessChallenge
+// 		CodeCoAACK, CodeCOANAK
+//  	CodeDisconnectACK, CodeDisconnectNAK
 //  - p.Authenticator contains the calculated authenticator
 func (p *Packet) IsAuthentic(request *Packet) bool {
 	switch p.Code {
