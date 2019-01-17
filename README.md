@@ -2,6 +2,7 @@
 
 [![GoDoc](https://godoc.org/github.com/blind-oracle/go-radius?status.svg)](https://godoc.org/github.com/blind-oracle/go-radius)
 [![cover.run](https://cover.run/go/github.com/blind-oracle/go-radius.svg?style=flat&tag=golang-1.10)](https://cover.run/go?tag=golang-1.10&repo=github.com%2Fblind-oracle%2Fgo-radius)
+[![Go Report Card](https://goreportcard.com/badge/github.com/blind-oracle/go-radius)](https://goreportcard.com/report/github.com/blind-oracle/go-radius)
 
 It's quite heavily rewritten fork of another Go [RADIUS library](https://github.com/layeh/radius)
 
